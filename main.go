@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -12,7 +13,7 @@ import (
 
 type StoreData struct {
 	value string
-	ttl time.Time
+	expiresAt time.Time
 }
 
 type Store struct {
@@ -20,27 +21,30 @@ type Store struct {
 	data map[string]StoreData
 }
 
-func (s *Store) Set(key string, value string) {
+func (s *Store) Set(key string, value string) (string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.data[key] = StoreData{
 		value: value,
-		ttl: time.Now().Add(time.Millisecond * 5000),
 	}
+	s.mu.Unlock()
+	s.Expire(key, 5)
+	return "OK"
 }
 
 func (s *Store) Get(key string) (string) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
+	
 	storeData, ok := s.data[key]
+	
+	s.mu.RUnlock()
 
 	if !ok {
 		return "ERR data doesn't exist"
 	}
 
-	if time.Now().After(storeData.ttl) {
-		delete(s.data, key)
+	expired := s.TTL(key)
+
+	if expired == "-1" {
 		return "ERR data expired"
 	}
 
@@ -58,6 +62,49 @@ func (s *Store) Exists(key string) (bool) {
 	defer s.mu.Unlock()
 	_, exists := s.data[key]
 	return exists
+}
+
+func (s *Store) Expire(key string, seconds int) (string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	value, ok := s.data[key]
+
+	if !ok {
+		return "ERR data not found"
+	}
+
+	value.expiresAt = time.Now().Add(time.Second * time.Duration(seconds))
+	s.data[key] = value
+
+	return "OK"
+}
+
+func (s *Store) TTL(key string) (string) {
+	s.mu.RLock()
+	
+	value, ok := s.data[key]
+
+	s.mu.RUnlock()
+
+	if !ok {
+		return  "-1"
+	}
+
+	if value.expiresAt.IsZero() {
+		return "Data never expires"
+	}
+
+	diff := time.Until(value.expiresAt)
+
+	if diff <= 0 {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		delete(s.data, key)
+		return "-1"
+	}
+
+	return strconv.Itoa(int(diff.Seconds()))
 }
 
 func (s *Store) Execute(command string, args []string) (string) {
