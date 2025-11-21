@@ -107,6 +107,29 @@ func (s *Store) TTL(key string) (string) {
 	return strconv.Itoa(int(diff.Seconds()))
 }
 
+func (s *Store) StartJanitor(interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		
+		for range ticker.C {
+			s.cleanup()
+		}
+	}()
+}
+
+func (s *Store) cleanup() {
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for k, v := range s.data {
+		if !v.expiresAt.IsZero() && now.After(v.expiresAt) {
+			delete(s.data, k)
+		}
+	}
+}
+
 func (s *Store) Execute(command string, args []string) (string) {
 	switch command {
     case "PING":
@@ -183,6 +206,8 @@ func main() {
 		mu: sync.RWMutex{},
 		data: make(map[string]StoreData),
 	}
+
+	store.StartJanitor(time.Duration(time.Second * 3))
 
 	for {
 		conn, err := ln.Accept()
